@@ -13,6 +13,8 @@
     "install:all": "npm install && cd server && npm install"
   },
   "dependencies": {
+    "dexie": "^4.3.0",
+    "highlight.js": "^11.11.1",
     "lucide-react": "^0.563.0",
     "react": "19.2.3",
     "react-dom": "19.2.3"

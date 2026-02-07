@@ -1,98 +1,76 @@
-# Gemini Chat
+# Pollux Chat
 
-Чат-интерфейс для Google Gemini API. Поддерживает текст, изображения, множественные чаты, streaming ответы.
+Clean, fast chat interface for Google Gemini AI. Runs locally or on any VPS.
 
-## Возможности
+## Features
 
-- 💬 Чат с Gemini (текст + изображения)
-- 📁 Множественные чаты с историей (IndexedDB)
-- ⚡ Streaming ответы
-- 🔄 Динамическая загрузка моделей
-- 🌙 Тёмная/светлая тема
-- 📱 Адаптивный дизайн
-- 🔑 BYOK (Bring Your Own Key)
+- **Multi-chat support** — Create unlimited conversations, stored in IndexedDB
+- **Streaming responses** — See AI typing in real-time
+- **Image support** — Drag & drop, paste from clipboard, or click to upload
+- **Model selection** — Dynamic model list from Google API
+- **System prompts** — Optional per-chat system instructions
+- **Edit & regenerate** — Edit your messages and regenerate responses
+- **Export** — Download chats as Markdown
+- **Dark/Light theme** — Auto-detects system preference
+- **BYOK** — Bring your own API key, encrypted in browser
+- **Privacy** — All data stored locally, nothing sent to our servers
 
 ## Tech Stack
 
-- **Frontend:** React, Vite, Tailwind CSS
-- **Backend:** Node.js, Express
+- **Frontend:** React + Vite + Tailwind CSS
+- **Backend:** Node.js + Express
 - **AI:** Google Gemini API
 - **Storage:** IndexedDB (Dexie.js)
+- **Security:** Web Crypto API for key encryption
 
----
+## Quick Start
 
-## Разработка
-
-### Требования
+### Prerequisites
 
 - Node.js 20+
-- Google API Key ([получить здесь](https://aistudio.google.com/apikey))
+- Google AI API key ([get free](https://aistudio.google.com/app/apikey))
 
-### Установка
+### Install & Run
 
 ```bash
-# Клонировать репозиторий
-git clone <https://github.com/Stepanchikkk/pollux-chat>
-cd gemini-chat
-
-# Установить зависимости
+# Install dependencies
 npm run install:all
 
-# Настроить переменные окружения
-cp server/.env.example server/.env
-# Отредактировать server/.env — добавить GOOGLE_API_KEY
-```
-
-### Запуск
-
-```bash
+# Development mode
 npm run dev
+
+# Open http://localhost:5173
 ```
 
-- Frontend: http://localhost:5173
-- Backend: http://localhost:3001
+Enter your Google AI API key when prompted.
 
----
+## Production Deployment
 
-## Production (VPS)
-
-### 1. Подготовка сервера
+### Build
 
 ```bash
-# Ubuntu/Debian
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# PM2
-npm install -g pm2
-```
-
-### 2. Деплой
-
-```bash
-# Клонировать
-git clone <https://github.com/Stepanchikkk/pollux-chat>
-cd gemini-chat
-
-# Установить зависимости
-npm run install:all
-
-# Настроить .env
-cp server/.env.example server/.env
-nano server/.env  # добавить GOOGLE_API_KEY
-
-# Собрать фронтенд
 npm run build
+```
 
-# Запустить через PM2
+### Run with PM2
+
+```bash
+# Install PM2
+npm install -g pm2
+
+# Configure environment (optional, for proxy)
+cp server/.env.example server/.env
+nano server/.env
+
+# Start
 pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```
 
-### 3. Reverse Proxy
+### Reverse Proxy
 
-#### Nginx
+**Nginx:**
 
 ```nginx
 server {
@@ -105,19 +83,12 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
         proxy_cache_bypass $http_upgrade;
     }
 }
 ```
 
-```bash
-# SSL (Let's Encrypt)
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com
-```
-
-#### Caddy
+**Caddy:**
 
 ```
 yourdomain.com {
@@ -125,52 +96,49 @@ yourdomain.com {
 }
 ```
 
-Caddy автоматически настраивает HTTPS.
+### SSL
 
-### 4. DNS
+- **Nginx:** `certbot --nginx -d yourdomain.com`
+- **Caddy:** Automatic HTTPS
 
-Создайте A-запись: `yourdomain.com → IP вашего сервера`
+## Environment Variables
 
----
+Create `server/.env`:
 
-## Переменные окружения
+```env
+# Server port (default: 3001)
+PORT=3001
 
-| Переменная | Описание | Обязательно |
-|------------|----------|-------------|
-| `GOOGLE_API_KEY` | API ключ Google Gemini | Да |
-| `PORT` | Порт сервера (по умолчанию 3001) | Нет |
-| `HTTPS_PROXY` | Прокси для обхода блокировок | Нет |
-
----
-
-## Структура проекта
-
-```
-gemini-chat/
-├── src/                    # React приложение
-│   ├── App.tsx            # Главный компонент
-│   ├── types.ts           # TypeScript типы
-│   └── hooks/             # React хуки
-├── server/                 # Express сервер
-│   ├── server.js          # API endpoints
-│   └── .env.example       # Шаблон конфига
-├── dist/                   # Собранный фронтенд (git-ignored)
-├── ecosystem.config.cjs    # PM2 конфиг
-└── package.json           # Скрипты и зависимости
+# Optional: Proxy for countries where Google API is blocked
+HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
----
+## Project Structure
 
-## Команды
+```
+pollux-chat/
+├── src/                    # React app
+│   ├── App.tsx            # Main component
+│   ├── lib/
+│   │   ├── db.ts          # IndexedDB (Dexie)
+│   │   └── crypto.ts      # API key encryption
+│   └── hooks/
+│       └── useTheme.ts    # Theme management
+├── server/
+│   └── server.js          # Express API
+├── dist/                   # Production build
+├── ecosystem.config.cjs    # PM2 config
+└── package.json
+```
 
-| Команда | Описание |
-|---------|----------|
-| `npm run dev` | Запуск в режиме разработки |
-| `npm run build` | Сборка фронтенда |
-| `npm start` | Запуск продакшен сервера |
-| `npm run install:all` | Установка всех зависимостей |
+## Scripts
 
----
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start dev server (client + API) |
+| `npm run build` | Build for production |
+| `npm start` | Run production server |
+| `npm run install:all` | Install all dependencies |
 
 ## License
 

@@ -46,20 +46,65 @@ function getApiKey(req) {
   return null;
 }
 
-// Test API key endpoint
+// Test API key + return models in one call
 app.post('/api/test-key', async (req, res) => {
   const apiKey = getApiKey(req);
   if (!apiKey) {
-    return res.status(401).json({ error: 'No API key provided' });
+    return res.status(401).json({ valid: false, error: 'No API key provided' });
   }
   
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-    await model.generateContent('Say "OK" in one word');
-    res.json({ valid: true });
+    const { ProxyAgent, fetch: undiciFetch } = await import('undici');
+    const fetchOptions = {};
+    
+    if (process.env.HTTPS_PROXY) {
+      fetchOptions.dispatcher = new ProxyAgent(process.env.HTTPS_PROXY);
+    }
+    
+    // Just fetch models list — free call, no quota used
+    const response = await undiciFetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      fetchOptions
+    );
+    
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      const msg = err?.error?.message || `HTTP ${response.status}`;
+      return res.json({ valid: false, error: msg });
+    }
+    
+    const data = await response.json();
+    
+    if (!data.models || data.models.length === 0) {
+      return res.json({ valid: false, error: 'No models available for this key' });
+    }
+    
+    // Key works — return models immediately
+    const models = data.models
+      .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+      .filter(m => !m.name.includes('embedding'))
+      .filter(m => !m.name.includes('aqa'))
+      .filter(m => !m.name.includes('imagen'))
+      .filter(m => !m.name.includes('robotics'))
+      .filter(m => !m.name.includes('tts'))
+      .map(m => ({
+        value: m.name.replace('models/', ''),
+        label: m.displayName || m.name.replace('models/', ''),
+        description: m.description?.substring(0, 100) || '',
+        inputTokens: m.inputTokenLimit,
+        outputTokens: m.outputTokenLimit
+      }))
+      .sort((a, b) => {
+        if (a.value.includes('2.5') && !b.value.includes('2.5')) return -1;
+        if (!a.value.includes('2.5') && b.value.includes('2.5')) return 1;
+        if (a.value.includes('2.0') && !b.value.includes('2.0')) return -1;
+        if (!a.value.includes('2.0') && b.value.includes('2.0')) return 1;
+        return a.label.localeCompare(b.label);
+      });
+    
+    res.json({ valid: true, models });
   } catch (error) {
-    res.status(401).json({ valid: false, error: error.message });
+    res.json({ valid: false, error: error.message });
   }
 });
 

@@ -169,7 +169,13 @@ export default function App() {
         await encryptApiKey(keyInput);
         setApiKey(keyInput);
         loadChats();
-        loadModels(keyInput);
+        // Models come back with the test-key response
+        if (data.models?.length) {
+          setModels(data.models);
+          setSelectedModel(data.models[0].value);
+        } else {
+          loadModels(keyInput);
+        }
       } else {
         setKeyError(data.error || 'Invalid API key');
       }

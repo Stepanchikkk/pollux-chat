@@ -23,18 +23,20 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(join(__dirname, '../dist')));
 }
 
-// Setup proxy if configured
+// Setup proxy if configured - replace global fetch with undici
 if (process.env.HTTPS_PROXY) {
-  const { ProxyAgent } = await import('undici');
+  const { ProxyAgent, fetch: undiciFetch } = await import('undici');
   const proxyAgent = new ProxyAgent(process.env.HTTPS_PROXY);
   
-  const originalFetch = global.fetch;
+  // Replace global fetch with undici fetch that supports proxy
   global.fetch = (url, options = {}) => {
     if (typeof url === 'string' && url.includes('googleapis.com')) {
       options.dispatcher = proxyAgent;
     }
-    return originalFetch(url, options);
+    return undiciFetch(url, options);
   };
+  
+  console.log('✅ Proxy configured for Google API');
 }
 
 // Get API key from request header

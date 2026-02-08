@@ -1,5 +1,5 @@
 {
-  "name": "gemini-chat-server",
+  "name": "pollux-chat-server",
   "version": "1.0.0",
   "type": "module",
   "scripts": {

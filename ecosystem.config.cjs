@@ -1,6 +1,6 @@
 module.exports = {
   apps: [{
-    name: 'gemini-chat',
+    name: 'pollux-chat',
     script: './server/server.js',
     instances: 1,
     autorestart: true,

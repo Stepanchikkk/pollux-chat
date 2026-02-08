@@ -8,7 +8,7 @@ Clean, fast chat interface for Google Gemini AI. Runs locally or on any VPS.
 - **Streaming responses** — See AI typing in real-time
 - **Image support** — Drag & drop, paste from clipboard, or click to upload
 - **Model selection** — Dynamic model list from Google API
-- **System prompts** — Optional per-chat system instructions
+- **System prompts** — Global prompt + per-chat instructions
 - **Edit & regenerate** — Edit your messages and regenerate responses
 - **Export** — Download chats as Markdown
 - **Dark/Light theme** — Auto-detects system preference
@@ -33,13 +33,7 @@ Clean, fast chat interface for Google Gemini AI. Runs locally or on any VPS.
 ### Install & Run
 
 ```bash
-# Install dependencies
-npm run install:all
-
-# Development mode
-npm run dev
-
-# Open http://localhost:5173
+npm run install:all && npm run dev
 ```
 
 Enter your Google AI API key when prompted.
@@ -55,17 +49,7 @@ npm run build
 ### Run with PM2
 
 ```bash
-# Install PM2
-npm install -g pm2
-
-# Configure environment (optional, for proxy)
-cp server/.env.example server/.env
-nano server/.env
-
-# Start
-pm2 start ecosystem.config.cjs
-pm2 save
-pm2 startup
+npm install -g pm2 && cp server/.env.example server/.env && nano server/.env && pm2 start ecosystem.config.cjs && pm2 save && pm2 startup
 ```
 
 ### Reverse Proxy

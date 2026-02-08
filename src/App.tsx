@@ -81,6 +81,68 @@ function parseQuotaError(errorText: string) {
   };
 }
 
+function getNextUtcMidnight(): number {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0);
+}
+
+function loadQuotaStore(): QuotaStore {
+  try {
+    const raw = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!raw) return { modelQuotas: {} };
+    const parsed = JSON.parse(raw) as QuotaStore;
+    if (!parsed?.modelQuotas) return { modelQuotas: {} };
+    const normalized: Record<string, QuotaInfo> = {};
+    Object.entries(parsed.modelQuotas).forEach(([key, value]) => {
+      normalized[key] = normalizeQuota(value);
+    });
+    return { modelQuotas: normalized };
+  } catch {
+    return { modelQuotas: {} };
+  }
+}
+
+function saveQuotaStore(store: QuotaStore) {
+  localStorage.setItem(QUOTA_STORAGE_KEY, JSON.stringify(store));
+}
+
+function normalizeQuota(quota: QuotaInfo): QuotaInfo {
+  if (!quota.resetAt) return quota;
+  if (Date.now() >= quota.resetAt) {
+    return {
+      ...quota,
+      used: 0,
+      remaining: quota.limit ?? null,
+      resetAt: quota.limit === null ? null : getNextUtcMidnight(),
+      lastUpdated: Date.now()
+    };
+  }
+  return quota;
+}
+
+function parseQuotaError(errorText: string) {
+  const match = errorText.match(/limit: (\d+)/);
+  const limitMatch = match ? parseInt(match[1], 10) : null;
+
+  const quotaValueMatch = errorText.match(/"quotaValue":"(\d+)"/);
+  const used = quotaValueMatch ? parseInt(quotaValueMatch[1], 10) : null;
+
+  const retryMatch = errorText.match(/retryDelay["\s:]+(\d+)s/);
+  const retrySeconds = retryMatch ? parseInt(retryMatch[1], 10) : null;
+
+  const isPerDay = errorText.includes('PerDay');
+  const isPerMinute = errorText.includes('PerMinute');
+
+  return {
+    limit: limitMatch,
+    used,
+    remaining: limitMatch !== null && used !== null ? limitMatch - used : null,
+    retryAfter: retrySeconds ? Date.now() + retrySeconds * 1000 : null,
+    period: isPerDay ? 'day' : isPerMinute ? 'minute' : 'unknown',
+    available: limitMatch !== 0
+  };
+}
+
 interface Model {
   value: string;
   label: string;
@@ -681,10 +743,7 @@ export default function App() {
   }
 
   async function handleSaveEdit() {
-    if (!editingMessageId || !currentChatId) return;
-    
-    // Find the message and delete everything after it
-    await deleteMessagesAfter(currentChatId, editingMessageId);
+    if (!editingMessageId) return;
     
     // Reload and resend with edited content
     const updatedMessages = await getChatMessages(currentChatId);
@@ -725,10 +784,12 @@ export default function App() {
     const markdown = await exportChat(currentChatId);
     const blob = new Blob([markdown], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
+    
     const a = document.createElement('a');
     a.href = url;
-    a.download = `chat-${currentChatId.slice(0, 8)}.md`;
+    a.download = `chat-${currentChatId}.md`;
     a.click();
+    
     URL.revokeObjectURL(url);
   }
 
@@ -830,8 +891,6 @@ export default function App() {
       </div>
     );
   }
-
-  const currentModel = models.find(m => m.value === selectedModel) || models[0];
 
   return (
     <div 

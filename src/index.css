@@ -21,3 +21,7 @@
   transition-property: background-color, border-color;
   transition-duration: 150ms;
 }
+
+body {
+  font-family: "Google Sans", "Inter", "Helvetica Neue", "Arial", sans-serif;
+}

@@ -37,7 +37,7 @@ export const db = new PolluxDatabase();
 export async function createChat(systemPrompt?: string): Promise<Chat> {
   const chat: Chat = {
     id: crypto.randomUUID(),
-    title: 'New Chat',
+    title: 'Новый чат',
     systemPrompt,
     createdAt: new Date(),
     updatedAt: new Date()
@@ -78,7 +78,7 @@ export async function addMessage(message: Omit<ChatMessage, 'id' | 'timestamp'>)
   const messageCount = await db.messages.where('chatId').equals(message.chatId).count();
   if (messageCount === 1 && message.role === 'user') {
     const title = message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '');
-    await updateChat(message.chatId, { title: title || 'New Chat' });
+    await updateChat(message.chatId, { title: title || 'Новый чат' });
   } else {
     await updateChat(message.chatId, {});
   }
@@ -115,16 +115,16 @@ export async function exportChat(chatId: string): Promise<string> {
   if (!chat) return '';
   
   let markdown = `# ${chat.title}\n\n`;
-  markdown += `*Exported: ${new Date().toLocaleString()}*\n\n`;
+  markdown += `*Экспортировано: ${new Date().toLocaleString()}*\n\n`;
   
   if (chat.systemPrompt) {
-    markdown += `## System Prompt\n\n${chat.systemPrompt}\n\n`;
+    markdown += `## Системный промпт\n\n${chat.systemPrompt}\n\n`;
   }
   
   markdown += `---\n\n`;
   
   for (const msg of messages) {
-    const role = msg.role === 'user' ? '**You**' : '**Assistant**';
+    const role = msg.role === 'user' ? '**Вы**' : '**Ассистент**';
     markdown += `${role} (${new Date(msg.timestamp).toLocaleTimeString()})\n\n`;
     markdown += `${msg.content}\n\n`;
     if (msg.images?.length) {

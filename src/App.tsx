@@ -15,6 +15,7 @@ import {
   addMessage, getChatMessages, deleteMessagesAfter, exportChat,
   type Chat, type ChatMessage, deleteMessage 
 } from './lib/db';
+import { getViableModels, type Model } from './lib/models';
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:3001' : '';
 const GLOBAL_SYSTEM_PROMPT_KEY = 'pollux-global-system-prompt';
@@ -59,34 +60,43 @@ function normalizeQuota(quota: QuotaInfo): QuotaInfo {
 }
 
 function parseQuotaError(errorText: string) {
-  const match = errorText.match(/limit: (\d+)/);
-  const limitMatch = match ? parseInt(match[1], 10) : null;
+  // Try to parse as JSON first
+  let errorJson: any = null;
+  try {
+    errorJson = JSON.parse(errorText);
+  } catch {
+    // Not JSON
+  }
 
-  const quotaValueMatch = errorText.match(/"quotaValue":"(\d+)"/);
-  const used = quotaValueMatch ? parseInt(quotaValueMatch[1], 10) : null;
+  const message = errorJson?.error?.message || errorText;
+  const details = errorJson?.error?.details || [];
 
-  const retryMatch = errorText.match(/retryDelay["\s:]+(\d+)s/);
-  const retrySeconds = retryMatch ? parseInt(retryMatch[1], 10) : null;
+  // 1. Extract limit from message (e.g., "limit: 20")
+  const limitMatch = message.match(/limit: (\d+)/);
+  const limit = limitMatch ? parseInt(limitMatch[1], 10) : null;
 
-  const isPerDay = errorText.includes('PerDay');
-  const isPerMinute = errorText.includes('PerMinute');
+  // 2. Extract used from QuotaFailure or message
+  const quotaFailure = details.find((d: any) => d['@type']?.includes('QuotaFailure'));
+  const firstViolation = quotaFailure?.violations?.[0];
+  const quotaValue = firstViolation?.quotaValue;
+  const used = quotaValue ? parseInt(quotaValue, 10) : (limit === 0 ? 0 : null);
+
+  // 3. Extract retryDelay from RetryInfo or message
+  const retryInfo = details.find((d: any) => d['@type']?.includes('RetryInfo'));
+  const retryDelayStr = retryInfo?.retryDelay || message.match(/retry in ([\d.]+)s/)?.[1];
+  const retrySeconds = retryDelayStr ? parseFloat(retryDelayStr.toString().replace('s', '')) : null;
+
+  const isPerDay = message.includes('PerDay') || firstViolation?.quotaId?.includes('PerDay');
+  const isPerMinute = message.includes('PerMinute') || firstViolation?.quotaId?.includes('PerMinute');
 
   return {
-    limit: limitMatch,
+    limit,
     used,
-    remaining: limitMatch !== null && used !== null ? limitMatch - used : null,
+    remaining: limit !== null && used !== null ? Math.max(0, limit - used) : (limit === 0 ? 0 : null),
     retryAfter: retrySeconds ? Date.now() + retrySeconds * 1000 : null,
     period: isPerDay ? 'day' : isPerMinute ? 'minute' : 'unknown',
-    available: limitMatch !== 0
+    available: limit !== 0
   };
-}
-
-interface Model {
-  value: string;
-  label: string;
-  description: string;
-  inputTokens?: number;
-  outputTokens?: number;
 }
 
 interface QuotaInfo {
@@ -287,26 +297,30 @@ export default function App() {
     retryPayload: { text: string; images: string[] }
   ) {
     const quotaInfo = parseQuotaError(errorText);
-    if (quotaInfo.limit !== null || quotaInfo.used !== null) {
+    if (quotaInfo.limit !== null || quotaInfo.used !== null || quotaInfo.retryAfter !== null) {
       updateQuota(modelValue, {
         limit: quotaInfo.limit,
         used: quotaInfo.used,
         remaining: quotaInfo.remaining,
-        resetAt: quotaInfo.period === 'day' ? getNextUtcMidnight() : null
+        resetAt: quotaInfo.period === 'day' ? getNextUtcMidnight() : (quotaInfo.retryAfter || null) // Используем retryAfter как resetAt для поминутных лимитов
       });
     }
 
     const modelLabel = getModelLabel(modelValue);
 
     if (quotaInfo.limit === 0) {
-      setErrorBanner(`❌ Модель ${modelLabel} недоступна на бесплатном тарифе`);
-      selectFallbackModel(modelValue);
+      setErrorBanner(`❌ Модель ${modelLabel} недоступна для вашего ключа.`);
+      // Принудительно очищаем выбранную модель, если она стала недоступной
+      if (selectedModel === modelValue) {
+        setSelectedModel("");
+      }
       return;
     }
 
     if (quotaInfo.remaining === 0) {
-      setErrorBanner(`⏳ Лимит исчерпан (0/${quotaInfo.limit ?? '—'}). Обновится завтра в 00:00 UTC.`);
-      selectFallbackModel(modelValue);
+      const resetAtValue = (quotaInfo as any).resetAt || quotaInfo.retryAfter; // Предпочитаем resetAt, если есть, иначе retryAfter
+      const resetTimeText = resetAtValue ? ` (сброс ${formatResetTime(resetAtValue)})` : ". Попробуйте позже.";
+      setErrorBanner(`⏳ Лимит исчерпан (0/${quotaInfo.limit ?? "—"})${resetTimeText}`);
       return;
     }
 
@@ -325,19 +339,20 @@ export default function App() {
     }
 
     if (errorText) {
-      setErrorBanner('⚠️ Превышен лимит. Попробуйте позже или другую модель.');
+      setErrorBanner("⚠️ Превышен лимит. Попробуйте позже или другую модель.");
     }
   }
 
   const quotaWarningMessage = useMemo(() => {
-    if (!selectedModel) return '';
+    if (!selectedModel) return "";
     const quota = getQuota(selectedModel);
-    if (!quota || quota.limit === null || quota.limit === 0 || quota.used === null) return '';
-    const usedRatio = quota.limit > 0 ? quota.used / quota.limit : 0;
+    if (!quota || quota.limit === null || quota.used === null) return ""; // Убрали quota.limit === 0 здесь, т.к. модель уже не должна быть выбрана
+
+    const usedRatio = (quota.limit && quota.limit > 0) ? (quota.used || 0) / quota.limit : 0;
     if (usedRatio >= 0.8 && quota.remaining !== null && quota.remaining > 0) {
       return `⚠️ Осталось ${quota.remaining} запрос(ов) на сегодня`;
     }
-    return '';
+    return "";
   }, [quotaStore, selectedModel]);
 
   async function loadChats() {
@@ -363,12 +378,13 @@ export default function App() {
   }
 
   async function handleNewChat() {
-    const chat = await createChat(chatSystemPrompt || undefined);
+    const chat = await createChat(undefined);
     setChats(prev => [chat, ...prev]);
     setCurrentChatId(chat.id);
     setMessages([]);
     setInput('');
     setImages([]);
+    setChatSystemPrompt('');
   }
 
   async function handleDeleteChat(chatId: string) {
@@ -389,14 +405,11 @@ export default function App() {
   async function loadModels(key: string) {
     setLoadingModels(true);
     try {
-      const res = await fetch(`${API_BASE}/api/models`, {
-        headers: { Authorization: `Bearer ${key}` }
-      });
-      const data = await res.json();
-      if (data.models?.length) {
-        setModels(data.models);
-        if (!selectedModel && data.models[0]) {
-          setSelectedModel(data.models[0].value);
+      const viableModels = await getViableModels(key, API_BASE);
+      if (viableModels.length > 0) {
+        setModels(viableModels);
+        if (!selectedModel && viableModels[0]) {
+          setSelectedModel(viableModels[0].value);
         }
       }
     } catch (e) {
@@ -424,15 +437,9 @@ export default function App() {
         await encryptApiKey(keyInput);
         setApiKey(keyInput);
         loadChats();
-        // Models come back with the test-key response
-        if (data.models?.length) {
-          setModels(data.models);
-          if (data.models[0]) {
-            setSelectedModel(data.models[0].value);
-          }
-        } else {
-          loadModels(keyInput);
-        }
+        
+        // Always reload models using the new logic for probing
+        loadModels(keyInput);
       } else {
         setKeyError(data.error || 'Invalid API key');
       }
@@ -748,27 +755,42 @@ export default function App() {
     navigator.clipboard.writeText(text);
   }
 
+  function formatResetTime(resetAt: number) {
+    const now = Date.now();
+    const diff = resetAt - now;
+    if (diff <= 0) return 'сейчас';
+    
+    if (diff < 3600000) { // < 1 hour
+      return `через ${Math.ceil(diff / 60000)} мин`;
+    }
+    
+    const date = new Date(resetAt);
+    return `в ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  }
+
   function getQuotaBadge(model: Model) {
     const quota = getQuota(model.value);
     if (!quota) {
       return null;
     }
+    
     if (quota.limit === 0) {
-      return { text: 'Недоступна (Free tier)', color: 'bg-zinc-300 text-zinc-600' };
+      return { text: 'Недоступна', color: 'bg-zinc-200 text-zinc-500' };
     }
+    
+    if (quota.remaining === 0) {
+      const resetText = quota.resetAt ? ` (сброс ${formatResetTime(quota.resetAt)})` : '';
+      return { text: `Лимит исчерпан${resetText}`, color: 'bg-red-500 text-white' };
+    }
+
     if (quota.limit !== null && quota.remaining !== null) {
-      const ratio = quota.limit > 0 ? quota.remaining / quota.limit : 0;
-      if (quota.remaining === 0) {
-        return { text: `0/${quota.limit} исчерпан`, color: 'bg-red-100 text-red-700' };
+      const ratio = quota.remaining / quota.limit;
+      if (ratio <= 0.2) {
+        return { text: `${quota.remaining}/${quota.limit} осталось`, color: 'bg-orange-500 text-white' };
       }
-      if (ratio <= 0.1) {
-        return { text: `${quota.remaining}/${quota.limit} осталось`, color: 'bg-red-100 text-red-700' };
-      }
-      if (ratio <= 0.5) {
-        return { text: `${quota.remaining}/${quota.limit} осталось`, color: 'bg-yellow-100 text-yellow-700' };
-      }
-      return { text: `${quota.remaining}/${quota.limit} осталось`, color: 'bg-green-100 text-green-700' };
+      return { text: `${quota.remaining}/${quota.limit}`, color: 'bg-green-500 text-white' };
     }
+    
     return null;
   }
 
@@ -929,31 +951,51 @@ export default function App() {
                     <RefreshCw size={14} className={loadingModels ? 'animate-spin' : ''} />
                   </button>
                 </div>
-                {models.map(model => {
-                  const badge = getQuotaBadge(model);
-                  return (
-                    <button
-                      key={model.value}
-                      onClick={() => { setSelectedModel(model.value); setShowModelDropdown(false); }}
-                      className={`w-full text-left px-3 py-3 border-b ${
-                        theme === 'dark' ? 'border-zinc-800 hover:bg-zinc-800' : 'border-zinc-100 hover:bg-zinc-50'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="font-medium text-sm">{model.label}</div>
-                        {badge && (
-                          <span className={`text-[10px] px-2 py-1 rounded-full ${badge.color}`}>{badge.text}</span>
+                {models
+                  .map(model => {
+                    const badge = getQuotaBadge(model);
+                    const isSelected = selectedModel === model.value;
+                    const quota = getQuota(model.value);
+                    const isExhausted = quota?.remaining === 0 || model.uiStatus === 'EXHAUSTED';
+
+                    return (
+                      <button
+                        key={model.value}
+                        onClick={() => { setSelectedModel(model.value); setShowModelDropdown(false); }}
+                        className={`w-full text-left px-4 py-3 border-b transition-colors relative ${
+                          theme === 'dark' ? 'border-zinc-800' : 'border-zinc-100'
+                        } ${
+                          isSelected 
+                            ? theme === 'dark' ? 'bg-blue-600/20 text-blue-400' : 'bg-blue-50 text-blue-600'
+                            : theme === 'dark' ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-zinc-50 text-zinc-700'
+                        } ${isExhausted ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        disabled={isExhausted} // Отключаем кнопку, если лимит исчерпан
+                      >
+                        {isSelected && (
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-600" />
                         )}
-                      </div>
-                      <div className="text-xs text-zinc-500 mt-1 line-clamp-2">{model.description}</div>
-                      {model.inputTokens && (
-                        <div className="text-[11px] text-zinc-400 mt-1">
-                          {(model.inputTokens / 1000).toFixed(0)}K / {(model.outputTokens! / 1000).toFixed(0)}K токенов
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={`font-semibold text-sm ${isSelected ? 'text-blue-500' : ''}`}>
+                            {model.label}
+                          </div>
+                          {badge && (
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badge.color}`}>
+                              {badge.text}
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </button>
-                  );
-                })}
+                        <div className="text-[11px] text-zinc-500 mt-1 line-clamp-2 leading-relaxed">
+                          {model.description}
+                        </div>
+                        {model.inputTokens && ( 
+                          <div className="text-[10px] text-zinc-400 mt-1.5 flex items-center gap-2">
+                            <ArrowRightLeft size={10} />
+                            {(model.inputTokens / 1000).toFixed(0)}K вх / {(model.outputTokens! / 1000).toFixed(0)}K исх
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
               </div>
             )}
           </div>
@@ -1004,7 +1046,7 @@ export default function App() {
                   <Bot size={18} />
                 </div>
               )}
-              <div className={`max-w-3xl rounded-2xl px-4 py-3 shadow-sm ${
+              <div className={`max-w-[85%] sm:max-w-3xl rounded-2xl px-4 py-3 shadow-sm overflow-hidden break-words ${
                 message.role === 'user'
                   ? 'bg-blue-600 text-white'
                   : theme === 'dark' ? 'bg-zinc-800 text-zinc-100' : 'bg-white text-zinc-900'
@@ -1077,7 +1119,7 @@ export default function App() {
               <div className="h-9 w-9 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0">
                 <Bot size={18} />
               </div>
-              <div className={`max-w-3xl rounded-2xl px-4 py-3 shadow-sm ${theme === 'dark' ? 'bg-zinc-800 text-zinc-100' : 'bg-white text-zinc-900'}`}>
+              <div className={`max-w-[85%] sm:max-w-3xl rounded-2xl px-4 py-3 shadow-sm overflow-hidden break-words ${theme === 'dark' ? 'bg-zinc-800 text-zinc-100' : 'bg-white text-zinc-900'}`}>
                 <div className={`prose prose-sm max-w-none ${theme === 'dark' ? 'prose-invert' : ''}`}>
                   <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
                     {streamingText}

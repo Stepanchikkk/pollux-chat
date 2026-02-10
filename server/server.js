@@ -99,30 +99,111 @@ app.post('/api/test-key', async (req, res) => {
         description: m.description?.substring(0, 100) || '',
         inputTokens: m.inputTokenLimit,
         outputTokens: m.outputTokenLimit
-      }))
-      .sort((a, b) => {
-        if (a.value.includes('2.5') && !b.value.includes('2.5')) return -1;
-        if (!a.value.includes('2.5') && b.value.includes('2.5')) return 1;
-        if (a.value.includes('2.0') && !b.value.includes('2.0')) return -1;
-        if (!a.value.includes('2.0') && b.value.includes('2.0')) return 1;
+      }));
+    
+    const modelsFromApi = data.models
+      .filter(m => m.supportedGenerationMethods?.includes("generateContent"))
+      .filter(m => !m.name.includes("embedding"))
+      .filter(m => !m.name.includes("aqa"))
+      .filter(m => !m.name.includes("imagen"))
+      .filter(m => !m.name.includes("robotics"))
+      .filter(m => !m.name.includes("tts"))
+      .map(m => ({
+        value: m.name.replace("models/", ""),
+        label: m.displayName || m.name.replace("models/", ""),
+        description: m.description?.substring(0, 100) || "",
+        inputTokens: m.inputTokenLimit,
+        outputTokens: m.outputTokenLimit
+      }));
+    
+    const uniqueModelsMap = new Map();
+    modelsFromApi.forEach(model => uniqueModelsMap.set(model.value, model));
+    const uniqueModels = Array.from(uniqueModelsMap.values());
+
+    uniqueModels.sort((a, b) => {
+        if (a.value.includes("2.5") && !b.value.includes("2.5")) return -1;
+        if (!a.value.includes("2.5") && b.value.includes("2.5")) return 1;
+        if (a.value.includes("2.0") && !b.value.includes("2.0")) return -1;
+        if (!a.value.includes("2.0") && b.value.includes("2.0")) return 1;
         return a.label.localeCompare(b.label);
       });
-    
-    res.json({ valid: true, models });
+
+    res.json({ valid: true, models: uniqueModels });
   } catch (error) {
     res.json({ valid: false, error: error.message });
   }
 });
 
-// Get available models
-app.get('/api/models', async (req, res) => {
+// Get raw models from Google
+app.get("/api/models-raw", async (req, res) => {
   const apiKey = getApiKey(req);
   if (!apiKey) {
-    return res.status(401).json({ error: 'No API key provided' });
+    return res.status(401).json({ error: "No API key provided" });
   }
   
   try {
-    const { ProxyAgent, fetch: undiciFetch } = await import('undici');
+    const { ProxyAgent, fetch: undiciFetch } = await import("undici");
+    const fetchOptions = {};
+    if (process.env.HTTPS_PROXY) {
+      fetchOptions.dispatcher = new ProxyAgent(process.env.HTTPS_PROXY);
+    }
+    
+    const response = await undiciFetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      fetchOptions
+    );
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Probe a single model
+app.post("/api/probe-model", async (req, res) => {
+  const apiKey = getApiKey(req);
+  const { model } = req.body;
+  if (!apiKey) return res.status(401).json({ error: "No API key provided" });
+  if (!model) return res.status(400).json({ error: "No model provided" });
+
+  try {
+    const { ProxyAgent, fetch: undiciFetch } = await import("undici");
+    const fetchOptions = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: "hi" }] }] })
+    };
+    if (process.env.HTTPS_PROXY) {
+      fetchOptions.dispatcher = new ProxyAgent(process.env.HTTPS_PROXY);
+    }
+
+    const response = await undiciFetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      fetchOptions
+    );
+
+    if (response.ok) {
+      return res.json({ ok: true });
+    }
+
+    const data = await response.json().catch(() => ({}));
+    const errorMsg = data.error?.message || `HTTP ${response.status}`;
+    res.status(response.status).json({ error: errorMsg });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get available models
+app.get("/api/models", async (req, res) => {
+  const apiKey = getApiKey(req);
+  if (!apiKey) {
+    return res.status(401).json({ error: "No API key provided" });
+  }
+  
+  try {
+    const { ProxyAgent, fetch: undiciFetch } = await import("undici");
     const fetchOptions = {};
     
     if (process.env.HTTPS_PROXY) {
@@ -141,30 +222,40 @@ app.get('/api/models', async (req, res) => {
     }
     
     const textModels = data.models
-      .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-      .filter(m => !m.name.includes('embedding'))
-      .filter(m => !m.name.includes('aqa'))
-      .filter(m => !m.name.includes('imagen'))
+      .filter(m => m.supportedGenerationMethods?.includes("generateContent"))
+      .filter(m => !m.name.includes("embedding"))
+      .filter(m => !m.name.includes("aqa"))
+      .filter(m => !m.name.includes("imagen"))
+      .filter(m => !m.name.includes("robotics"))
+      .filter(m => !m.name.includes("tts"))
       .map(m => ({
-        value: m.name.replace('models/', ''),
-        label: m.displayName || m.name.replace('models/', ''),
-        description: m.description?.substring(0, 100) || '',
+        value: m.name.replace("models/", ""),
+        label: m.displayName || m.name.replace("models/", ""),
+        description: m.description?.substring(0, 100) || "",
         inputTokens: m.inputTokenLimit,
         outputTokens: m.outputTokenLimit
-      }))
-      .sort((a, b) => {
+      }));
+    
+    // Удаляем дубликаты моделей на основе их 'value'
+    const uniqueModelsMap = new Map();
+    textModels.forEach(model => uniqueModelsMap.set(model.value, model));
+    const uniqueModels = Array.from(uniqueModelsMap.values());
+
+    console.log('Unique models count:', uniqueModels.length);
+
+    uniqueModels.sort((a, b) => {
         // Sort newer models first
-        if (a.value.includes('2.5') && !b.value.includes('2.5')) return -1;
-        if (!a.value.includes('2.5') && b.value.includes('2.5')) return 1;
-        if (a.value.includes('2.0') && !b.value.includes('2.0')) return -1;
-        if (!a.value.includes('2.0') && b.value.includes('2.0')) return 1;
+        if (a.value.includes("2.5") && !b.value.includes("2.5")) return -1;
+        if (!a.value.includes("2.5") && b.value.includes("2.5")) return 1;
+        if (a.value.includes("2.0") && !b.value.includes("2.0")) return -1;
+        if (!a.value.includes("2.0") && b.value.includes("2.0")) return 1;
         return a.label.localeCompare(b.label);
       });
-    
-    res.json({ models: textModels });
+
+    res.json({ models: uniqueModels });
   } catch (error) {
-    console.error('Models error:', error.message);
-    res.status(500).json({ error: 'Failed to fetch models' });
+    console.error("Models error:", error.message);
+    res.status(500).json({ error: "Failed to fetch models" });
   }
 });
 

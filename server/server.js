@@ -323,15 +323,32 @@ app.post('/api/chat', async (req, res) => {
     const chat = model.startChat({ history });
     const result = await chat.sendMessageStream(parts);
     
-    for await (const chunk of result.stream) {
-      const text = chunk.text();
-      if (text) {
-        res.write(`data: ${JSON.stringify({ text })}\n\n`);
+    try {
+      for await (const chunk of result.stream) {
+        try {
+          const text = chunk.text();
+          if (text) {
+            res.write(`data: ${JSON.stringify({ text })}\n\n`);
+            // Flush the response to ensure data is sent immediately
+            if (res.flush) res.flush();
+          }
+        } catch (chunkError) {
+          console.error('Chunk processing error:', chunkError);
+          // Continue processing other chunks
+        }
+      }
+      
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (streamError) {
+      console.error('Stream error:', streamError);
+      if (!res.headersSent) {
+        res.status(500).json({ error: streamError.message });
+      } else {
+        res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
+        res.end();
       }
     }
-    
-    res.write('data: [DONE]\n\n');
-    res.end();
     
   } catch (error) {
     console.error('Chat error:', error.message);

@@ -318,7 +318,8 @@ export default function App() {
     }
 
     if (quotaInfo.remaining === 0) {
-      const resetAtValue = (quotaInfo as any).resetAt || quotaInfo.retryAfter; // Предпочитаем resetAt, если есть, иначе retryAfter
+      const quota = getQuota(modelValue);
+      const resetAtValue = quota?.resetAt || quotaInfo.retryAfter;
       const resetTimeText = resetAtValue ? ` (сброс ${formatResetTime(resetAtValue)})` : ". Попробуйте позже.";
       setErrorBanner(`⏳ Лимит исчерпан (0/${quotaInfo.limit ?? "—"})${resetTimeText}`);
       return;
@@ -606,18 +607,25 @@ export default function App() {
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let fullText = '';
+      let buffer = ''; // Buffer for incomplete lines
 
       while (reader) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        // Decode chunk and add to buffer
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        
+        // Split by newlines but keep the last incomplete line in buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep last incomplete line
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
-            const data = line.slice(6);
+            const data = line.slice(6).trim();
             if (data === '[DONE]') break;
+            if (!data) continue; // Skip empty data
 
             try {
               const parsed = JSON.parse(data);
@@ -632,8 +640,32 @@ export default function App() {
                 fullText += parsed.text;
                 setStreamingText(fullText);
               }
+            } catch (parseError) {
+              // Only log if it's not a simple parse error
+              if (parseError instanceof Error && parseError.message !== 'quota_error') {
+                console.warn('Parse error for line:', line, parseError);
+              } else if (parseError instanceof Error && parseError.message === 'quota_error') {
+                throw parseError;
+              }
+            }
+          }
+        }
+      }
+      
+      // Process any remaining data in buffer
+      if (buffer.trim()) {
+        const line = buffer.trim();
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (data && data !== '[DONE]') {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.text) {
+                fullText += parsed.text;
+                setStreamingText(fullText);
+              }
             } catch {
-              // Ignore parse errors
+              // Ignore final parse errors
             }
           }
         }
